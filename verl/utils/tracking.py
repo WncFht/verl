@@ -23,6 +23,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from verl.protocol import DataProto
+
 
 class Tracking:
     """A unified tracking interface for logging experiment data to multiple backends.
@@ -44,17 +46,27 @@ class Tracking:
         "console",
         "clearml",
         "trackio",
-        "file",
+        "rl_logging_board",
     ]
 
-    def __init__(self, project_name, experiment_name, default_backend: str | list[str] = "console", config=None):
+    def __init__(
+        self,
+        project_name,
+        experiment_name,
+        default_backend: str | list[str] = "console",
+        config=None,
+    ):
         if isinstance(default_backend, str):
             default_backend = [default_backend]
         for backend in default_backend:
             if backend == "tracking":
                 import warnings
 
-                warnings.warn("`tracking` logger is deprecated. use `wandb` instead.", DeprecationWarning, stacklevel=2)
+                warnings.warn(
+                    "`tracking` logger is deprecated. use `wandb` instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             else:
                 assert backend in self.supported_backend, f"{backend} is not supported"
 
@@ -66,7 +78,12 @@ class Tracking:
             settings = None
             if config and config["trainer"].get("wandb_proxy", None):
                 settings = wandb.Settings(https_proxy=config["trainer"]["wandb_proxy"])
-            wandb.init(project=project_name, name=experiment_name, config=config, settings=settings)
+            wandb.init(
+                project=project_name,
+                name=experiment_name,
+                config=config,
+                settings=settings,
+            )
             self.logger["wandb"] = wandb
 
         if "trackio" in default_backend:
@@ -80,13 +97,17 @@ class Tracking:
 
             import mlflow
 
-            MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:////tmp/mlruns.db")
+            MLFLOW_TRACKING_URI = os.environ.get(
+                "MLFLOW_TRACKING_URI", "sqlite:////tmp/mlruns.db"
+            )
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
             # Project_name is actually experiment_name in MLFlow
             # If experiment does not exist, will create a new experiment
             experiment = mlflow.set_experiment(project_name)
-            mlflow.start_run(experiment_id=experiment.experiment_id, run_name=experiment_name)
+            mlflow.start_run(
+                experiment_id=experiment.experiment_id, run_name=experiment_name
+            )
             mlflow.log_params(_compute_mlflow_params_from_objects(config))
             self.logger["mlflow"] = _MlflowLoggingAdapter()
 
@@ -99,7 +120,9 @@ class Tracking:
             SWANLAB_LOG_DIR = os.environ.get("SWANLAB_LOG_DIR", "swanlog")
             SWANLAB_MODE = os.environ.get("SWANLAB_MODE", "cloud")
             if SWANLAB_API_KEY:
-                swanlab.login(SWANLAB_API_KEY)  # NOTE: previous login information will be overwritten
+                swanlab.login(
+                    SWANLAB_API_KEY
+                )  # NOTE: previous login information will be overwritten
 
             if config is None:
                 config = {}  # make sure config is not None, otherwise **config will raise error
@@ -133,7 +156,9 @@ class Tracking:
             self.logger["vemlp_wandb"] = vemlp_wandb
 
         if "tensorboard" in default_backend:
-            self.logger["tensorboard"] = _TensorboardAdapter(project_name, experiment_name)
+            self.logger["tensorboard"] = _TensorboardAdapter(
+                project_name, experiment_name
+            )
 
         if "console" in default_backend:
             from verl.utils.logger import LocalLogger
@@ -142,15 +167,29 @@ class Tracking:
             self.logger["console"] = self.console_logger
 
         if "clearml" in default_backend:
-            self.logger["clearml"] = ClearMLLogger(project_name, experiment_name, config)
+            self.logger["clearml"] = ClearMLLogger(
+                project_name, experiment_name, config
+            )
 
-        if "file" in default_backend:
-            self.logger["file"] = FileLogger(project_name, experiment_name)
+        if "rl_logging_board" in default_backend:
+            log_dir = None
+            if config and config["trainer"].get("rl_logging_board_dir", None):
+                log_dir = config["trainer"]["rl_logging_board_dir"]
+            self.logger["rl_logging_board"] = _RLLoggingBoardAdapter(
+                root_log_dir=log_dir,
+                project_name=project_name,
+                experiment_name=experiment_name,
+            )
 
-    def log(self, data, step, backend=None):
+    def log(self, data, step, batch: DataProto = None, backend=None, tokenizer=None):
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
-                logger_instance.log(data=data, step=step)
+                if default_backend == "rl_logging_board":
+                    logger_instance.log(
+                        data=data, step=step, batch=batch, tokenizer=tokenizer
+                    )
+                else:
+                    logger_instance.log(data=data, step=step)
 
     def __del__(self):
         if "wandb" in self.logger:
@@ -161,12 +200,10 @@ class Tracking:
             self.logger["vemlp_wandb"].finish(exit_code=0)
         if "tensorboard" in self.logger:
             self.logger["tensorboard"].finish()
-        if "clearml" in self.logger:
-            self.logger["clearml"].finish()
+        if "clearnml" in self.logger:
+            self.logger["clearnml"].finish()
         if "trackio" in self.logger:
             self.logger["trackio"].finish()
-        if "file" in self.logger:
-            self.logger["file"].finish()
 
 
 class ClearMLLogger:
@@ -218,29 +255,7 @@ class ClearMLLogger:
                 )
 
     def finish(self):
-        self._task.close()
-
-
-class FileLogger:
-    def __init__(self, project_name: str, experiment_name: str):
-        self.project_name = project_name
-        self.experiment_name = experiment_name
-
-        self.filepath = os.getenv("VERL_FILE_LOGGER_PATH", None)
-        if self.filepath is None:
-            root_path = os.path.expanduser(os.getenv("VERL_FILE_LOGGER_ROOT", "."))
-            directory = os.path.join(root_path, self.project_name)
-            os.makedirs(directory, exist_ok=True)
-            self.filepath = os.path.join(directory, f"{self.experiment_name}.jsonl")
-            print(f"Creating file logger at {self.filepath}")
-        self.fp = open(self.filepath, "w")
-
-    def log(self, data, step):
-        data = {"step": step, "data": data}
-        self.fp.write(json.dumps(data) + "\n")
-
-    def finish(self):
-        self.fp.close()
+        self._task.mark_completed()
 
 
 class _TensorboardAdapter:
@@ -249,7 +264,9 @@ class _TensorboardAdapter:
 
         from torch.utils.tensorboard import SummaryWriter
 
-        tensorboard_dir = os.environ.get("TENSORBOARD_DIR", f"tensorboard_log/{project_name}/{experiment_name}")
+        tensorboard_dir = os.environ.get(
+            "TENSORBOARD_DIR", f"tensorboard_log/{project_name}/{experiment_name}"
+        )
         os.makedirs(tensorboard_dir, exist_ok=True)
         print(f"Saving tensorboard log to {tensorboard_dir}.")
         self.writer = SummaryWriter(tensorboard_dir)
@@ -260,6 +277,93 @@ class _TensorboardAdapter:
 
     def finish(self):
         self.writer.close()
+
+
+class _RLLoggingBoardAdapter:
+    def __init__(self, root_log_dir: str, project_name: str, experiment_name: str):
+        self.save_path = os.path.join(root_log_dir, project_name, experiment_name)
+        os.makedirs(self.save_path, exist_ok=True)
+
+    def log(self, data: dict, step: int, batch: "DataProto", *args, **kwargs):
+        if batch is None:
+            return
+
+        tokenizer = kwargs.get("tokenizer")
+        if not tokenizer:
+            raise ValueError("log() 方法需要一个 'tokenizer' 关键字参数。")
+
+        log_file = os.path.join(self.save_path, "rollout_data_rank0.jsonl")
+
+        with open(log_file, "a", encoding="utf-8") as f:
+            for data_item in batch:
+                # --- 数据准备和解码 ---
+                prompt_ids = data_item.batch["prompts"]
+                prompt_length = prompt_ids.shape[-1]
+                valid_prompt_length = data_item.batch["attention_mask"][
+                    :prompt_length
+                ].sum()
+                valid_prompt_ids = prompt_ids[-valid_prompt_length:]
+
+                response_ids = data_item.batch["responses"]
+                valid_response_length = data_item.batch["attention_mask"][
+                    prompt_length:
+                ].sum()
+                valid_response_ids = response_ids[:valid_response_length]
+
+                prompt_str = tokenizer.decode(valid_prompt_ids)
+                response_str = tokenizer.decode(valid_response_ids)
+                response_tokens = [
+                    tokenizer.decode([token]) for token in valid_response_ids
+                ]
+
+                # --- ✨ 3. 分步构建日志字典，提高可读性 ---
+
+                # 首先，包含那些基本确定存在的字段
+                cur_sample = {
+                    "step": step,
+                    "prompt": prompt_str,
+                    "response": response_str,
+                    "response_tokens": response_tokens,
+                    "logprobs": data_item.batch["old_log_probs"][:valid_response_length]
+                    .cpu()
+                    .tolist(),
+                    "token_rewards": data_item.batch["token_level_rewards"][
+                        :valid_response_length
+                    ]
+                    .cpu()
+                    .tolist(),
+                    "reward": data_item.batch["token_level_scores"][
+                        :valid_response_length
+                    ]
+                    .cpu()
+                    .sum()
+                    .item(),
+                }
+
+                # --- ✨ 4. 安全地添加可选字段，彻底避免 KeyError ---
+
+                # 安全地添加 ref_logprobs
+                ref_log_prob_tensor = data_item.batch.get("ref_log_prob")
+                if ref_log_prob_tensor is not None:
+                    cur_sample["ref_logprobs"] = (
+                        ref_log_prob_tensor[:valid_response_length].cpu().tolist()
+                    )
+
+                # 安全地添加 values (来自 Critic)
+                values_tensor = data_item.batch.get("values")
+                if values_tensor is not None:
+                    cur_sample["values"] = (
+                        values_tensor[:valid_response_length].cpu().tolist()
+                    )
+
+                # 安全地添加 ground_truth
+                ground_truth = data_item.non_tensor_batch.get("reward_model", {}).get(
+                    "ground_truth"
+                )
+                if ground_truth is not None:
+                    cur_sample["ground_truth"] = ground_truth
+
+                f.write(f"{json.dumps(cur_sample, ensure_ascii=False)}\n")
 
 
 class _MlflowLoggingAdapter:
@@ -274,11 +378,17 @@ def _compute_mlflow_params_from_objects(params) -> dict[str, Any]:
     if params is None:
         return {}
 
-    return _flatten_dict(_transform_params_to_json_serializable(params, convert_list_to_dict=True), sep="/")
+    return _flatten_dict(
+        _transform_params_to_json_serializable(params, convert_list_to_dict=True),
+        sep="/",
+    )
 
 
 def _transform_params_to_json_serializable(x, convert_list_to_dict: bool):
-    _transform = partial(_transform_params_to_json_serializable, convert_list_to_dict=convert_list_to_dict)
+    _transform = partial(
+        _transform_params_to_json_serializable,
+        convert_list_to_dict=convert_list_to_dict,
+    )
 
     if dataclasses.is_dataclass(x):
         return _transform(dataclasses.asdict(x))
@@ -286,7 +396,9 @@ def _transform_params_to_json_serializable(x, convert_list_to_dict: bool):
         return {k: _transform(v) for k, v in x.items()}
     if isinstance(x, list):
         if convert_list_to_dict:
-            return {"list_len": len(x)} | {f"{i}": _transform(v) for i, v in enumerate(x)}
+            return {"list_len": len(x)} | {
+                f"{i}": _transform(v) for i, v in enumerate(x)
+            }
         else:
             return [_transform(v) for v in x]
     if isinstance(x, Path):
@@ -341,7 +453,11 @@ class ValidationGenerationsLogger:
 
         # Create column names for all samples
         columns = ["step"] + sum(
-            [[f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"] for i in range(len(samples))], []
+            [
+                [f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"]
+                for i in range(len(samples))
+            ],
+            [],
         )
 
         if not hasattr(self, "validation_table"):
@@ -399,7 +515,9 @@ class ValidationGenerationsLogger:
                     json.dump(row_data, file)
                 mlflow.log_artifact(validation_gen_step_file)
         except Exception as e:
-            print(f"WARNING: save validation generation file to mlflow failed with error {e}")
+            print(
+                f"WARNING: save validation generation file to mlflow failed with error {e}"
+            )
 
     def log_generations_to_clearml(self, samples, step):
         """Log validation generation to clearml as table"""
@@ -437,7 +555,9 @@ class ValidationGenerationsLogger:
 
             # Use the same directory structure as _TensorboardAdapter
             if self.project_name and self.experiment_name:
-                default_dir = os.path.join("tensorboard_log", self.project_name, self.experiment_name)
+                default_dir = os.path.join(
+                    "tensorboard_log", self.project_name, self.experiment_name
+                )
             else:
                 default_dir = "tensorboard_log"
 

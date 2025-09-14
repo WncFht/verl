@@ -22,6 +22,8 @@ import pprint
 
 import torch
 
+from verl.protocol import DataProto
+
 
 def concat_dict_to_str(dict: dict, step):
     output = [f"step:{step}"]
@@ -46,7 +48,7 @@ class LocalLogger:
     def flush(self):
         pass
 
-    def log(self, data, step):
+    def log(self, data, step, batch: DataProto = None, *args, **kwargs):
         if self.print_to_console:
             print(concat_dict_to_str(data, step=step), flush=True)
 
@@ -64,7 +66,12 @@ class DecoratorLoggerBase:
     """
 
     def __init__(
-        self, role: str, logger: logging.Logger = None, level=logging.DEBUG, rank: int = 0, log_only_rank_0: bool = True
+        self,
+        role: str,
+        logger: logging.Logger = None,
+        level=logging.DEBUG,
+        rank: int = 0,
+        log_only_rank_0: bool = True,
     ):
         self.role = role
         self.logger = logger
@@ -109,7 +116,9 @@ def print_with_rank(message: str, rank: int = 0, log_only_rank_0: bool = False):
         print(f"[Rank {rank}] {message}", flush=True)
 
 
-def print_with_rank_and_timer(message: str, rank: int = 0, log_only_rank_0: bool = False):
+def print_with_rank_and_timer(
+    message: str, rank: int = 0, log_only_rank_0: bool = False
+):
     """_summary_
     Print a message with rank information and a timestamp.
     This function prints the message only if `log_only_rank_0` is False or if the rank is 0.
@@ -125,7 +134,13 @@ def print_with_rank_and_timer(message: str, rank: int = 0, log_only_rank_0: bool
         print(message, flush=True)
 
 
-def log_with_rank(message: str, rank, logger: logging.Logger, level=logging.INFO, log_only_rank_0: bool = False):
+def log_with_rank(
+    message: str,
+    rank,
+    logger: logging.Logger,
+    level=logging.INFO,
+    log_only_rank_0: bool = False,
+):
     """_summary_
     Log a message with rank information using a logger.
     This function logs the message only if `log_only_rank_0` is False or if the rank is 0.

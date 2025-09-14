@@ -5,7 +5,7 @@ export HF_HONE=/mnt/data2/huggingface
 export TORCH_CUDA_ARCH_LIST=9.0
 export WANDB_MODE=offline
 
-MODEL=/mnt/data2/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1
+MODEL=/mnt/data2/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775
 PYTHONUNBUFFERED=1
 
 python3 -m verl.trainer.main_ppo \
@@ -47,7 +47,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb", "rl_logging_board"]' \
     trainer.rl_logging_board_dir=logs/rl_logging_board \
     trainer.project_name='verl_grpo_example_gsm8k' \
-    trainer.experiment_name='qwen2.5_3b_grpo_lora' \
+    trainer.experiment_name='qwen2.5_0.5b_grpo_lora' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
