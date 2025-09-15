@@ -44,7 +44,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
-    trainer.logger='["console","wandb", "rl_logging_board"]' \
+    trainer.logger='["console","wandb"]' \
     trainer.rl_logging_board_dir=logs/rl_logging_board \
     trainer.project_name='verl_grpo_example_gsm8k' \
     trainer.experiment_name='qwen2.5_3b_grpo_lora' \
