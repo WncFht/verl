@@ -504,7 +504,7 @@ def maybe_patch_fsdp_module(model):
         fully_shard_module.FSDPModule = orig_fsdp_module
 
 
-def apply_fsdp2(model, fsdp_kwargs, config):
+def apply_fsdp2(model, fsdp_kwargs, config, is_lora=False):
     """model: AutoModelForCausalLM"""
     assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
 
@@ -524,6 +524,15 @@ def apply_fsdp2(model, fsdp_kwargs, config):
             isinstance(module, nn.Embedding) and not model.config.tie_word_embeddings
         ):
             modules.append(module)
+    
+    # Apply LoRA-specific wrapping if needed
+    if is_lora:
+        for name, module in model.named_modules():
+            if (len(list(module.named_children())) == 0
+                and getattr(module, "weight", None) is not None
+                and module.weight.requires_grad
+                and module not in modules):
+                modules.append(module)
 
     for idx, module in enumerate(modules):
         # if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
