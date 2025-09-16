@@ -19,8 +19,14 @@ import time
 from collections import OrderedDict
 
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.fsdp.api import FullStateDictConfig, ShardedStateDictConfig, StateDictType
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.api import (
+    FullStateDictConfig,
+    ShardedStateDictConfig,
+    StateDictType,
+)
+from torch.distributed.fsdp.fully_sharded_data_parallel import (
+    FullyShardedDataParallel as FSDP,
+)
 
 try:
     # for torch 2.5+
@@ -34,7 +40,12 @@ from verl import DataProto
 from verl.protocol import all_gather_data_proto
 from verl.third_party.vllm import LLM, VLLM_SLEEP_LEVEL
 from verl.third_party.vllm import parallel_state as vllm_ps
-from verl.utils.device import get_device_id, get_device_name, get_torch_device, set_expandable_segments
+from verl.utils.device import (
+    get_device_id,
+    get_device_name,
+    get_torch_device,
+    set_expandable_segments,
+)
 from verl.utils.fsdp_utils import (
     fsdp_version,
     layered_summon_lora_params,
@@ -42,7 +53,11 @@ from verl.utils.fsdp_utils import (
     offload_fsdp_model_to_cpu,
 )
 from verl.utils.import_utils import deprecated
-from verl.utils.model import check_exclude_modules, check_target_modules, convert_weight_keys
+from verl.utils.model import (
+    check_exclude_modules,
+    check_target_modules,
+    convert_weight_keys,
+)
 from verl.utils.profiler import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
 from verl.utils.torch_functional import check_device_is_available
 from verl.utils.vllm import TensorLoRARequest, VLLMHijack, is_version_ge
@@ -98,7 +113,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         self.full_params = full_params
         if full_params and fsdp_version(self.module) == 1:
             FSDP.set_state_dict_type(
-                self.module, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig()
+                self.module,
+                state_dict_type=StateDictType.FULL_STATE_DICT,
+                state_dict_config=FullStateDictConfig(),
             )
         elif fsdp_version(self.module) == 1:
             FSDP.set_state_dict_type(
@@ -115,7 +132,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         # get a random rng states
         if self.device_mesh is not None:
             gen_dp_rank = self.device_mesh["dp"].get_local_rank()
-            get_torch_device().manual_seed(gen_dp_rank + 1000)  # make sure all tp ranks have the same random states
+            get_torch_device().manual_seed(
+                gen_dp_rank + 1000
+            )  # make sure all tp ranks have the same random states
             self.gen_random_states = get_torch_device().get_rng_state()
             get_torch_device().set_rng_state(self.torch_random_states)
         else:
@@ -134,6 +153,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             """
             from peft.utils.save_and_load import get_peft_model_state_dict
 
+            breakpoint()
             lora_params = OrderedDict()
             peft_model = getattr(self.module, "_fsdp_wrapped_module", self.module)
             if fsdp_version(self.module) > 0:
@@ -156,12 +176,18 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                             }
                         else:
                             model = peft_model.base_model.model
-                            orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
+                            orig_dev = (
+                                "cpu"
+                                if "cpu" in str(next(model.parameters()).device)
+                                else get_device_name()
+                            )
                             model = model.to("cpu")
                             for name, param in model.state_dict().items():
                                 if any(x in name for x in ["_flat_param", "lora_"]):
                                     continue
-                                name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
+                                name = name.replace(
+                                    "_fsdp_wrapped_module.", ""
+                                ).replace(".base_layer", "")
                                 lora_params[name] = (
                                     param.full_tensor().detach().cpu()
                                     if hasattr(param, "full_tensor")
@@ -174,12 +200,18 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                     lora_params = get_peft_model_state_dict(peft_model)
                 else:
                     model = peft_model.base_model.model
-                    orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
+                    orig_dev = (
+                        "cpu"
+                        if "cpu" in str(next(model.parameters()).device)
+                        else get_device_name()
+                    )
                     model = model.to("cpu")
                     for name, param in model.state_dict().items():
                         if any(x in name for x in ["_flat_param", "lora_"]):
                             continue
-                        name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
+                        name = name.replace("_fsdp_wrapped_module.", "").replace(
+                            ".base_layer", ""
+                        )
                         lora_params[name] = param.detach().cpu()
                     model = model.to(orig_dev)
             return lora_params
@@ -195,7 +227,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         with simple_timer("reshard", self.timing):
             get_torch_device().empty_cache()
 
-            log_gpu_memory_usage("Before state_dict() in sharding manager memory", logger=logger)
+            log_gpu_memory_usage(
+                "Before state_dict() in sharding manager memory", logger=logger
+            )
             if self.offload_param:
                 load_fsdp_model_to_gpu(self.module)
 
@@ -206,35 +240,48 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 params = __collect_lora_params()
             else:
                 params = self.module.state_dict()
-            params = convert_weight_keys(params, getattr(self.module, "_fsdp_wrapped_module", self.module))
+            params = convert_weight_keys(
+                params, getattr(self.module, "_fsdp_wrapped_module", self.module)
+            )
 
             if self.offload_param:
                 offload_fsdp_model_to_cpu(self.module)
-            log_gpu_memory_usage("After state_dict() in sharding manager memory", logger=logger)
+            log_gpu_memory_usage(
+                "After state_dict() in sharding manager memory", logger=logger
+            )
 
             # vllm need to set _set_allocator_settings to False
             logger.debug("fsdp vllm sharding_manager _set_allocator_settings to False")
             set_expandable_segments(False)
 
             if self.rollout_config.free_cache_engine:
-                if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
+                if (
+                    "tags"
+                    in inspect.signature(self.inference_engine.wake_up).parameters
+                ):
                     self.inference_engine.wake_up(tags=["weights"])
                 else:
                     self.inference_engine.wake_up()
 
             # update model params
             self.update_params(params, peft_config=peft_config)
-            log_gpu_memory_usage("After sync model weights in sharding manager", logger=logger)
+            log_gpu_memory_usage(
+                "After sync model weights in sharding manager", logger=logger
+            )
             del params
             get_torch_device().empty_cache()
 
             if (
                 self.rollout_config.free_cache_engine
-                and "tags" in inspect.signature(self.inference_engine.wake_up).parameters
+                and "tags"
+                in inspect.signature(self.inference_engine.wake_up).parameters
             ):
                 self.inference_engine.wake_up(tags=["kv_cache"])
 
-            log_gpu_memory_usage("After del state_dict and empty_cache in sharding manager", logger=logger)
+            log_gpu_memory_usage(
+                "After del state_dict and empty_cache in sharding manager",
+                logger=logger,
+            )
 
             # important: need to manually set the random states of each tp to be identical.
             if self.device_mesh is not None:
@@ -319,26 +366,36 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                     Returns:
                         str: Transformed parameter key for base layer.
                     """
-                    stacked_params = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+                    stacked_params = [
+                        "q_proj",
+                        "k_proj",
+                        "v_proj",
+                        "o_proj",
+                        "gate_proj",
+                        "up_proj",
+                        "down_proj",
+                    ]
                     if k.endswith(".weight"):
                         module_k = k[: -len(".weight")]
                         if check_exclude_modules(peft_config, module_k):
                             return k
-                        elif any([module_k.endswith(s) for s in stacked_params]) or check_target_modules(
-                            peft_config, module_k
-                        ):
+                        elif any(
+                            [module_k.endswith(s) for s in stacked_params]
+                        ) or check_target_modules(peft_config, module_k):
                             return f"{module_k}.base_layer.weight"
                     if k.endswith(".bias"):
                         module_k = k[: -len(".bias")]
                         if check_exclude_modules(peft_config, module_k):
                             return k
-                        elif any([module_k.endswith(s) for s in stacked_params]) or check_target_modules(
-                            peft_config, module_k
-                        ):
+                        elif any(
+                            [module_k.endswith(s) for s in stacked_params]
+                        ) or check_target_modules(peft_config, module_k):
                             return f"{module_k}.base_layer.bias"
                     return k
 
-                updated_params = {replace_lora_wrapper(k): v for k, v in updated_params.items()}
+                updated_params = {
+                    replace_lora_wrapper(k): v for k, v in updated_params.items()
+                }
 
         from verl.utils.vllm.patch import patch_vllm_moe_model_weight_loader
 
@@ -346,10 +403,17 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         device = get_device_id()  # used when fsdp2 set cpu_offload_policy
         loaded_params = model.load_weights(
             (
-                (name, param.to(device, non_blocking=True).full_tensor() if isinstance(param, DTensor) else param)
+                (
+                    name,
+                    param.to(device, non_blocking=True).full_tensor()
+                    if isinstance(param, DTensor)
+                    else param,
+                )
                 for name, param in updated_params.items()
             )
         )
 
         self.base_sync_done = True
-        logger.info(f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}")
+        logger.info(
+            f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}"
+        )
