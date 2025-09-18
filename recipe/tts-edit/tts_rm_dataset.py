@@ -38,9 +38,6 @@ SCORER_PROMPT_TEMPLATE = Template(
 """
 )
 
-# Instruction following prompt for the model
-INSTRUCTION_FOLLOWING = "请首先使用<think></think>标签进行思考，分析编辑前后的图像变化，然后在<answer></answer>标签中给出0-9的评分。"
-
 
 def load_tts_edit_dataset(data_dir: str, split: str = "train") -> list[dict[str, Any]]:
     """
@@ -305,7 +302,7 @@ def make_map_fn(
 
         # Construct the prompt with instruction following
         scorer_prompt = SCORER_PROMPT_TEMPLATE.substitute(instruction=instruction)
-        full_prompt = scorer_prompt + "\n" + INSTRUCTION_FOLLOWING
+        full_prompt = scorer_prompt + "\n" + "<image>" + "\n编辑后的图像:\n" + "<image>"
 
         # Create the conversation format for chat template
         # Note: For multi-image VLM, we need to structure the content properly

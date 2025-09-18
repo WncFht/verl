@@ -153,7 +153,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             """
             from peft.utils.save_and_load import get_peft_model_state_dict
 
-            breakpoint()
+            # breakpoint()
             lora_params = OrderedDict()
             peft_model = getattr(self.module, "_fsdp_wrapped_module", self.module)
             if fsdp_version(self.module) > 0:
@@ -237,6 +237,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             peft_model = getattr(self.module, "_fsdp_wrapped_module", self.module)
             if hasattr(peft_model, "peft_config"):
                 peft_config = peft_model.peft_config.get("default", None)
+                # breakpoint()
                 params = __collect_lora_params()
             else:
                 params = self.module.state_dict()

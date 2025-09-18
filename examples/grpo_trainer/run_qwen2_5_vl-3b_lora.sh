@@ -1,13 +1,15 @@
 set -x
 
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=1,2,3,4
 # export HF_HONE=/mnt/data2/huggingface
-export TORCH_CUDA_ARCH_LIST=8.0
-# export WANDB_MODE=offline
+export TORCH_CUDA_ARCH_LIST=9.0
+export HF_DATASETS_CACHE=$HOME/data/.cache/huggingface/datasets
+export WANDB_MODE=offline
 
-MODEL=/home/fanghaotian-20250830/src/huggingface/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3
-# MODEL=/mnt/data2/huggingface/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3
+# MODEL=/home/fanghaotian-20250830/src/huggingface/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3
+MODEL=/mnt/data2/huggingface/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3
 PYTHONUNBUFFERED=1
+TARGET_MODULES='["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]'
 # If you are using vllm<=0.6.3, you might need to set the following environment variable to avoid bugs:
 # export VLLM_ATTENTION_BACKEND=XFORMERS
 
@@ -25,7 +27,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.lora_rank=64 \
     actor_rollout_ref.model.lora_alpha=32 \
-    actor_rollout_ref.model.target_modules=q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj \
+    actor_rollout_ref.model.target_modules=$TARGET_MODULES \
     actor_rollout_ref.model.exclude_modules='.*visual.*' \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.model.use_liger=True \
@@ -57,7 +59,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo_example_geo3k' \
-    trainer.experiment_name='qwen2_5_vl_3b_function_rm_rank64' \
+    trainer.experiment_name='qwen2_5_vl_3b_lr3e-5_rank64_new' \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \

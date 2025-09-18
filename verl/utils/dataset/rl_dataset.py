@@ -98,7 +98,9 @@ class RLHFDataset(Dataset):
         self.processor = processor
         self.config = config
 
-        self.cache_dir = os.path.expanduser(config.get("cache_dir", "~/.cache/verl/rlhf"))
+        self.cache_dir = os.path.expanduser(
+            config.get("cache_dir", "~/.cache/verl/rlhf")
+        )
         self.prompt_key = config.get("prompt_key", "prompt")
         self.image_key = config.get("image_key", "images")
         self.video_key = config.get("video_key", "videos")
@@ -109,7 +111,9 @@ class RLHFDataset(Dataset):
         self.filter_overlong_prompts = config.get("filter_overlong_prompts", True)
         self.apply_chat_template_kwargs = config.get("apply_chat_template_kwargs", {})
 
-        self.num_workers = config.get("filter_overlong_prompts_workers", max(1, os.cpu_count() // 4))
+        self.num_workers = config.get(
+            "filter_overlong_prompts_workers", max(1, os.cpu_count() // 4)
+        )
         self.num_workers = min(self.num_workers, os.cpu_count())
         self.use_shm = config.get("use_shm", False)
         self.chat_template_func = config.get("chat_template_func", None)
@@ -121,23 +125,97 @@ class RLHFDataset(Dataset):
         self._download()
         self._read_files_and_tokenize()
 
+    # 1. 在类里新增一个工具函数
+    def _stat_prompt_length(self, dataframe: datasets.Dataset) -> datasets.Dataset:
+        """
+        统计 prompt 长度分布并打印，不做任何过滤。
+        """
+        if len(dataframe) == 0:
+            print("Empty dataset, skip stat.")
+            return dataframe
+
+        lengths = []
+        for sample in dataframe:
+            ln = self._prompt_length_of_one_sample(sample)
+            lengths.append(ln)
+
+        lengths = np.array(lengths)
+        print("=============== Prompt length statistics ===============")
+        print(f"count   : {lengths.size}")
+        print(f"mean    : {lengths.mean():.2f}")
+        print(f"std     : {lengths.std():.2f}")
+        print(f"min     : {lengths.min()}")
+        print(f"25%     : {np.percentile(lengths, 25)}")
+        print(f"50%     : {np.percentile(lengths, 50)}")
+        print(f"75%     : {np.percentile(lengths, 75)}")
+        print(f"95%     : {np.percentile(lengths, 95)}")
+        print(f"99%     : {np.percentile(lengths, 99)}")
+        print(f"max     : {lengths.max()}")
+        print(f"truncation threshold: {self.max_prompt_length}")
+        return dataframe
+
+    def _prompt_length_of_one_sample(self, doc: dict) -> int:
+        """
+        计算单个 sample 的 prompt 长度（token 数），与后面 filter 逻辑完全一致。
+        """
+        if self.processor is not None:
+            from verl.utils.dataset.vision_utils import process_image, process_video
+
+            messages = self._build_messages(doc.copy())
+            raw_prompt = self.processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=False,
+                **self.apply_chat_template_kwargs,
+            )
+            images = (
+                [process_image(img) for img in doc[self.image_key]]
+                if self.image_key in doc and doc[self.image_key]
+                else None
+            )
+            videos = (
+                [process_video(vid) for vid in doc[self.video_key]]
+                if self.video_key in doc and doc[self.video_key]
+                else None
+            )
+            return len(
+                self.processor(text=[raw_prompt], images=images, videos=videos)[
+                    "input_ids"
+                ][0]
+            )
+        else:
+            return len(
+                self.tokenizer.apply_chat_template(
+                    doc[self.prompt_key],
+                    add_generation_prompt=True,
+                    **self.apply_chat_template_kwargs,
+                )
+            )
+
     def _download(self, use_origin_parquet=False):
         from verl.utils.fs import copy_to_local
 
-        data_files = self.data_files if not use_origin_parquet else self.original_data_files
+        data_files = (
+            self.data_files if not use_origin_parquet else self.original_data_files
+        )
         for i, parquet_file in enumerate(data_files):
-            self.data_files[i] = copy_to_local(src=parquet_file, cache_dir=self.cache_dir, use_shm=self.use_shm)
+            self.data_files[i] = copy_to_local(
+                src=parquet_file, cache_dir=self.cache_dir, use_shm=self.use_shm
+            )
 
     def _read_files_and_tokenize(self):
         dataframes = []
         for parquet_file in self.data_files:
             # read parquet files and cache
-            dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
+            dataframe = datasets.load_dataset("parquet", data_files=parquet_file)[
+                "train"
+            ]
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 
         print(f"dataset len: {len(self.dataframe)}")
 
+        # self._stat_prompt_length(self.dataframe)
         self.dataframe = self.maybe_filter_out_long_prompts(self.dataframe)
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset = None):
@@ -155,7 +233,10 @@ class RLHFDataset(Dataset):
                 def doc2len(doc) -> int:
                     messages = self._build_messages(doc)
                     raw_prompt = self.processor.apply_chat_template(
-                        messages, add_generation_prompt=True, tokenize=False, **self.apply_chat_template_kwargs
+                        messages,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                        **self.apply_chat_template_kwargs,
                     )
                     images = (
                         [process_image(image) for image in doc[image_key]]
@@ -168,14 +249,20 @@ class RLHFDataset(Dataset):
                         else None
                     )
 
-                    return len(processor(text=[raw_prompt], images=images, videos=videos)["input_ids"][0])
+                    return len(
+                        processor(text=[raw_prompt], images=images, videos=videos)[
+                            "input_ids"
+                        ][0]
+                    )
 
             else:
 
                 def doc2len(doc) -> int:
                     return len(
                         tokenizer.apply_chat_template(
-                            doc[prompt_key], add_generation_prompt=True, **self.apply_chat_template_kwargs
+                            doc[prompt_key],
+                            add_generation_prompt=True,
+                            **self.apply_chat_template_kwargs,
                         )
                     )
 
@@ -192,10 +279,14 @@ class RLHFDataset(Dataset):
         self.serialize_dataset = not hasattr(self, "original_data_files")
         # resume dataframe if not it's serialized in data.pt
         if not self.serialize_dataset:
-            self._download(use_origin_parquet=True)  # download and resume from original parquet files
+            self._download(
+                use_origin_parquet=True
+            )  # download and resume from original parquet files
             self._read_files_and_tokenize()
         else:
-            print(r"old dataloader ckpt file is used, please train from scratch for better ckpt performance")
+            print(
+                r"old dataloader ckpt file is used, please train from scratch for better ckpt performance"
+            )
 
     def __len__(self):
         return len(self.dataframe)
@@ -226,6 +317,7 @@ class RLHFDataset(Dataset):
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
         row_dict: dict = self.dataframe[item]
+        # breakpoint()
         messages = self._build_messages(row_dict)
         model_inputs = {}
 
@@ -233,7 +325,10 @@ class RLHFDataset(Dataset):
             from verl.utils.dataset.vision_utils import process_image, process_video
 
             raw_prompt = self.processor.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False, **self.apply_chat_template_kwargs
+                messages,
+                add_generation_prompt=True,
+                tokenize=False,
+                **self.apply_chat_template_kwargs,
             )
             multi_modal_data = {}
 
@@ -255,7 +350,9 @@ class RLHFDataset(Dataset):
                 # link: https://github.com/vllm-project/vllm/blob/3c545c0c3b98ee642373a308197d750d0e449403/vllm/multimodal/parse.py#L205
                 multi_modal_data["video"] = [video.numpy() for video in videos]
 
-            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
+            model_inputs = self.processor(
+                text=[raw_prompt], images=images, videos=videos, return_tensors="pt"
+            )
 
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")
@@ -281,9 +378,14 @@ class RLHFDataset(Dataset):
                     "models like GLM can copy chat_template.jinja from instruct models"
                 )
             raw_prompt = self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False, **self.apply_chat_template_kwargs
+                messages,
+                add_generation_prompt=True,
+                tokenize=False,
+                **self.apply_chat_template_kwargs,
             )
-            model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
+            model_inputs = self.tokenizer(
+                raw_prompt, return_tensors="pt", add_special_tokens=False
+            )
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")
 
@@ -296,7 +398,11 @@ class RLHFDataset(Dataset):
             truncation=self.truncation,
         )
 
-        if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
+        if (
+            self.processor is not None
+            and "Qwen2VLImageProcessor"
+            in self.processor.image_processor.__class__.__name__
+        ):
             from verl.models.transformers.qwen2_vl import get_rope_index
 
             position_ids = [
@@ -326,9 +432,13 @@ class RLHFDataset(Dataset):
             elif self.truncation == "middle":
                 left_half = self.max_prompt_length // 2
                 right_half = self.max_prompt_length - left_half
-                raw_prompt_ids = raw_prompt_ids[:left_half] + raw_prompt_ids[-right_half:]
+                raw_prompt_ids = (
+                    raw_prompt_ids[:left_half] + raw_prompt_ids[-right_half:]
+                )
             elif self.truncation == "error":
-                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}.")
+                raise RuntimeError(
+                    f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}."
+                )
 
         row_dict["raw_prompt_ids"] = raw_prompt_ids
         # encode prompts without chat template
@@ -344,10 +454,18 @@ class RLHFDataset(Dataset):
             row_dict["extra_info"] = dict()
         index = row_dict.get("extra_info", {}).get("index", 0)
         tools_kwargs = row_dict.get("extra_info", {}).get("tools_kwargs", {})
-        interaction_kwargs = row_dict.get("extra_info", {}).get("interaction_kwargs", {})
-        need_tools_kwargs = row_dict.get("extra_info", {}).get("need_tools_kwargs", self.need_tools_kwargs)
+        interaction_kwargs = row_dict.get("extra_info", {}).get(
+            "interaction_kwargs", {}
+        )
+        need_tools_kwargs = row_dict.get("extra_info", {}).get(
+            "need_tools_kwargs", self.need_tools_kwargs
+        )
         if need_tools_kwargs and not tools_kwargs:
-            logger.warning("tools_kwargs is empty for index {}, data source: {}", index, row_dict["data_source"])
+            logger.warning(
+                "tools_kwargs is empty for index {}, data source: {}",
+                index,
+                row_dict["data_source"],
+            )
         row_dict["index"] = index
         row_dict["tools_kwargs"] = tools_kwargs
         row_dict["interaction_kwargs"] = interaction_kwargs

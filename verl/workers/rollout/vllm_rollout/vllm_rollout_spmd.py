@@ -49,11 +49,6 @@ from filelock import FileLock
 from omegaconf import ListConfig
 from tensordict import TensorDict
 from torch.distributed.device_mesh import DeviceMesh
-from vllm import LLM, SamplingParams
-from vllm.config import CompilationConfig, CompilationLevel
-from vllm.lora.request import LoRARequest
-from vllm.model_executor.sampling_metadata import SamplingMetadata
-from vllm.worker.worker_base import WorkerWrapperBase
 
 from verl import DataProto
 from verl.third_party.vllm import VLLM_SLEEP_LEVEL
@@ -64,6 +59,11 @@ from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.utils.vllm import TensorLoRARequest, VLLMHijack, is_version_ge
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.base import BaseRollout
+from vllm import LLM, SamplingParams
+from vllm.config import CompilationConfig, CompilationLevel
+from vllm.lora.request import LoRARequest
+from vllm.model_executor.sampling_metadata import SamplingMetadata
+from vllm.worker.worker_base import WorkerWrapperBase
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -79,7 +79,9 @@ def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> list[in
     # remove the left padding in the prompt token_id
     # pad_token_id = self.llm_engine.tokenizer.pad_token_id if self.llm_engine.tokenizer.pad_token_id
     # is not None else self.llm_engine.tokenizer.eos_token_id
-    non_pad_index = torch.nonzero(prompt_token_ids != pad_token_id, as_tuple=False)[0][0]
+    non_pad_index = torch.nonzero(prompt_token_ids != pad_token_id, as_tuple=False)[0][
+        0
+    ]
     token_ids = prompt_token_ids[non_pad_index:].tolist()
     return token_ids
 
@@ -107,7 +109,11 @@ class vLLMRollout(BaseRollout):
         model_hf_config = model_config.hf_config
         trust_remote_code = model_config.trust_remote_code
         self.lora_kwargs = (
-            {"enable_lora": True, "max_loras": 1, "max_lora_rank": model_config.lora_rank}
+            {
+                "enable_lora": True,
+                "max_loras": 1,
+                "max_lora_rank": model_config.lora_rank,
+            }
             if model_config.lora_rank > 0
             else {}
         )
@@ -126,16 +132,20 @@ class vLLMRollout(BaseRollout):
             elif hasattr(model_hf_config, "llm_config") and hasattr(
                 model_hf_config.llm_config, "max_position_embeddings"
             ):
-                max_position_embeddings = model_hf_config.llm_config.max_position_embeddings
+                max_position_embeddings = (
+                    model_hf_config.llm_config.max_position_embeddings
+                )
             elif hasattr(model_hf_config, "text_config") and hasattr(
                 model_hf_config.text_config, "max_position_embeddings"
             ):
-                max_position_embeddings = model_hf_config.text_config.max_position_embeddings
+                max_position_embeddings = (
+                    model_hf_config.text_config.max_position_embeddings
+                )
             if max_position_embeddings is None:
                 raise ValueError("max_position_embeddings not found in model_hf_config")
-            assert max_position_embeddings >= config.prompt_length + config.response_length, (
-                "model context length should be greater than total sequence length"
-            )
+            assert (
+                max_position_embeddings >= config.prompt_length + config.response_length
+            ), "model context length should be greater than total sequence length"
         else:
             # handle type where there's a length extend factor
             # see https://qwen.readthedocs.io/en/latest/deployment/vllm.html#extended-context-support
@@ -151,15 +161,22 @@ class vLLMRollout(BaseRollout):
                 + f"max_position_embeddings={model_hf_config.max_position_embeddings}"
             )
 
-        max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
+        max_model_len = int(
+            config.max_model_len or config.prompt_length + config.response_length
+        )
 
-        if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
+        if (
+            max_num_batched_tokens < max_model_len
+            and self.config.enable_chunked_prefill
+        ):
             raise ValueError(
                 "Enable chunked prefill, max_num_batched_tokens is smaller than max_model_len, \
                              please increase max_num_batched_tokens or disable chunked prefill"
             )
 
-        load_format = "dummy" if config.load_format.startswith("dummy") else config.load_format
+        load_format = (
+            "dummy" if config.load_format.startswith("dummy") else config.load_format
+        )
 
         # copy it to avoid secretly modifying the engine config
         engine_kwargs = config.get("engine_kwargs", {}).get("vllm", {}) or {}
@@ -168,7 +185,9 @@ class vLLMRollout(BaseRollout):
         # - `None` means not setting it, so we pop it, and leave it to vLLM default value
         #    (which can vary across different vLLM versions);
         # - Otherwise it's the desired value we want to explicitly set.
-        engine_kwargs = {key: val for key, val in engine_kwargs.items() if val is not None}
+        engine_kwargs = {
+            key: val for key, val in engine_kwargs.items() if val is not None
+        }
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
 
@@ -179,11 +198,15 @@ class vLLMRollout(BaseRollout):
         if not config.enforce_eager and cudagraph_capture_sizes:
             if isinstance(cudagraph_capture_sizes, ListConfig):
                 compilation_config["compilation_config"] = CompilationConfig(
-                    level=CompilationLevel.PIECEWISE, cudagraph_capture_sizes=cudagraph_capture_sizes
+                    level=CompilationLevel.PIECEWISE,
+                    cudagraph_capture_sizes=cudagraph_capture_sizes,
                 )
             else:
-                logger.warning(f"cudagraph_capture_sizes must be a list, but got {cudagraph_capture_sizes}")
+                logger.warning(
+                    f"cudagraph_capture_sizes must be a list, but got {cudagraph_capture_sizes}"
+                )
 
+        # breakpoint()
         self.inference_engine = LLM(
             model=model_path,
             enable_sleep_mode=config.free_cache_engine,
@@ -279,7 +302,11 @@ class vLLMRollout(BaseRollout):
         non_tensor_batch = prompts.non_tensor_batch
         if "raw_prompt_ids" not in non_tensor_batch:
             non_tensor_batch["raw_prompt_ids"] = np.array(
-                [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object
+                [
+                    _pre_process_inputs(self.pad_token_id, idx[i])
+                    for i in range(batch_size)
+                ],
+                dtype=object,
             )
 
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
@@ -288,12 +315,20 @@ class vLLMRollout(BaseRollout):
         if "multi_modal_data" in non_tensor_batch:
             vllm_inputs = []
             for raw_prompt_ids, multi_modal_data in zip(
-                non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data"), strict=True
+                non_tensor_batch.pop("raw_prompt_ids"),
+                non_tensor_batch.pop("multi_modal_data"),
+                strict=True,
             ):
-                vllm_inputs.append({"prompt_token_ids": raw_prompt_ids, "multi_modal_data": multi_modal_data})
+                vllm_inputs.append(
+                    {
+                        "prompt_token_ids": raw_prompt_ids,
+                        "multi_modal_data": multi_modal_data,
+                    }
+                )
         else:
             vllm_inputs = [
-                {"prompt_token_ids": raw_prompt_ids} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
+                {"prompt_token_ids": raw_prompt_ids}
+                for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
             ]
 
         for input_data in vllm_inputs:
@@ -331,7 +366,11 @@ class vLLMRollout(BaseRollout):
             if len(lora_int_ids) > 0:
                 lora_int_id = lora_int_ids[0]
                 lora_requests = [
-                    LoRARequest(lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/simon-stub-path")
+                    LoRARequest(
+                        lora_name=f"{lora_int_id}",
+                        lora_int_id=lora_int_id,
+                        lora_path="/simon-stub-path",
+                    )
                 ] * batch_size
 
         # users can customize different sampling_params at different run
@@ -358,9 +397,9 @@ class vLLMRollout(BaseRollout):
                             curr_log_prob.append(logprob[response_ids[i]].logprob)
                         rollout_log_probs.append(curr_log_prob)
 
-            response = pad_2d_list_to_length(response, self.pad_token_id, max_length=self.config.response_length).to(
-                idx.device
-            )
+            response = pad_2d_list_to_length(
+                response, self.pad_token_id, max_length=self.config.response_length
+            ).to(idx.device)
             if self.config.calculate_log_probs:
                 rollout_log_probs = pad_2d_list_to_length(
                     rollout_log_probs, -1, max_length=self.config.response_length
@@ -370,10 +409,14 @@ class vLLMRollout(BaseRollout):
             seq = torch.cat([idx, response], dim=-1)
 
         response_length = response.size(1)
-        delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+        delta_position_id = torch.arange(
+            1, response_length + 1, device=position_ids.device
+        )
         delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
         if position_ids.dim() == 3:  # qwen2vl mrope
-            delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+            delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(
+                batch_size, 3, -1
+            )
 
         # TODO(sgm): fix position_ids on right_pad
         # prompt: left pad + response: right pad
@@ -426,13 +469,19 @@ class vLLMRollout(BaseRollout):
 
         self.inference_engine.sleep(level=self.sleep_level)
 
-    async def update_weights(self, weights: Generator[tuple[str, torch.Tensor], None, None], **kwargs):
+    async def update_weights(
+        self, weights: Generator[tuple[str, torch.Tensor], None, None], **kwargs
+    ):
         """Update the weights of the rollout model.
 
         Args:
             weights: A generator that yields the name of the weight tensor and the tensor itself.
         """
-        peft_config, base_sync_done = kwargs.get("peft_config", None), kwargs.get("base_sync_done", False)
+        peft_config, base_sync_done = (
+            kwargs.get("peft_config", None),
+            kwargs.get("base_sync_done", False),
+        )
+        # breakpoint()
         if peft_config and base_sync_done:
             lora_int_id = int(time.time_ns() % 0x7FFFFFFF)
             lora_reqest = TensorLoRARequest(
@@ -545,7 +594,9 @@ class vLLMAsyncRollout(BaseRollout):
 
     def _load_model(self, *args, **kwargs):
         self.inference_engine.load_model(*args, **kwargs)
-        _monkey_patch_compute_logits(self.inference_engine.worker.model_runner.model, len(self.tokenizer))
+        _monkey_patch_compute_logits(
+            self.inference_engine.worker.model_runner.model, len(self.tokenizer)
+        )
 
     async def _execute_method(self, method: str | bytes, *args, **kwargs):
         if method == "init_worker":
@@ -571,7 +622,9 @@ class vLLMAsyncRollout(BaseRollout):
         if self.config.free_cache_engine:
             self.inference_engine.sleep(level=self.sleep_level)
 
-    async def update_weights(self, weights: Generator[tuple[str, torch.Tensor], None, None], **kwargs):
+    async def update_weights(
+        self, weights: Generator[tuple[str, torch.Tensor], None, None], **kwargs
+    ):
         """Update the weights of the rollout model.
 
         Args:

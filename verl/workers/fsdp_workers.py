@@ -518,7 +518,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
-            # breakpoint()
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(
                     gradient_checkpointing_kwargs={"use_reentrant": False}
@@ -539,6 +538,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     ),
                     "bias": "none",
                 }
+                # breakpoint()
                 actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
 
         self.use_orig_params = fsdp_config.get("use_orig_params", False)
@@ -762,6 +762,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         log_gpu_memory_usage(
             f"Before building {self.config.rollout.name} rollout", logger=logger
         )
+        # breakpoint()
         self.rollout = get_rollout_class(rollout_config.name, rollout_config.mode)(
             config=rollout_config,
             model_config=model_config,
@@ -825,6 +826,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 layered_summon=self.config.rollout.get("layered_summon", False),
                 base_sync_done=self.base_sync_done,
             )
+            # breakpoint()
             if not self.base_sync_done:
                 params = {
                     replace_lora_wrapper(k, peft_config): v for k, v in params.items()
@@ -961,6 +963,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     "After offload actor optimizer during init", logger=logger
                 )
 
+        # breakpoint()
         if self._is_actor:
             actor_cfg = omega_conf_to_dataclass(self.config.actor)
             self.actor = DataParallelPPOActor(
