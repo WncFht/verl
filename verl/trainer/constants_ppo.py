@@ -21,7 +21,7 @@ PPO_RAY_RUNTIME_ENV = {
     "env_vars": {
         "TOKENIZERS_PARALLELISM": "true",
         "NCCL_DEBUG": "WARN",
-        "VLLM_LOGGING_LEVEL": "WARN",
+        "VLLM_LOGGING_LEVEL": "INFO",
         "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
         # To prevent hanging or crash during synchronization of weights between actor and rollout
@@ -39,7 +39,9 @@ def get_ppo_ray_runtime_env():
     To avoid repeat of some environment variables that are already set.
     """
     working_dir = (
-        json.loads(os.environ.get(RAY_JOB_CONFIG_JSON_ENV_VAR, "{}")).get("runtime_env", {}).get("working_dir", None)
+        json.loads(os.environ.get(RAY_JOB_CONFIG_JSON_ENV_VAR, "{}"))
+        .get("runtime_env", {})
+        .get("working_dir", None)
     )
 
     runtime_env = {

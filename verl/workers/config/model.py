@@ -77,7 +77,7 @@ class HFModelConfig(BaseConfig):
     # lora related. We may setup a separate config later
     lora_rank: int = 0
     lora_alpha: int = 16
-    target_modules: Optional[str] = "all-linear"
+    target_modules: Optional[list[str]] = None
 
     exclude_modules: Optional[str] = None
     use_liger: bool = False
@@ -99,9 +99,15 @@ class HFModelConfig(BaseConfig):
 
         # constuct tokenizer
         if self.load_tokenizer:
-            self.local_tokenizer_path = copy_to_local(self.tokenizer_path, use_shm=self.use_shm)
-            self.tokenizer = hf_tokenizer(self.local_tokenizer_path, trust_remote_code=self.trust_remote_code)
-            self.processor = hf_processor(self.local_tokenizer_path, trust_remote_code=self.trust_remote_code)
+            self.local_tokenizer_path = copy_to_local(
+                self.tokenizer_path, use_shm=self.use_shm
+            )
+            self.tokenizer = hf_tokenizer(
+                self.local_tokenizer_path, trust_remote_code=self.trust_remote_code
+            )
+            self.processor = hf_processor(
+                self.local_tokenizer_path, trust_remote_code=self.trust_remote_code
+            )
 
         if self.custom_chat_template is not None:
             if self.processor is not None:
@@ -109,15 +115,21 @@ class HFModelConfig(BaseConfig):
             else:
                 self.tokenizer.chat_template = self.custom_chat_template
 
-        self.local_hf_config_path = copy_to_local(self.hf_config_path, use_shm=self.use_shm)
+        self.local_hf_config_path = copy_to_local(
+            self.hf_config_path, use_shm=self.use_shm
+        )
         self.generation_config = get_generation_config(
             self.local_hf_config_path, trust_remote_code=self.trust_remote_code
         )
 
         # constuct hf_config
-        attn_implementation = self.override_config.get("attn_implementation", "flash_attention_2")
+        attn_implementation = self.override_config.get(
+            "attn_implementation", "flash_attention_2"
+        )
         self.hf_config = AutoConfig.from_pretrained(
-            self.local_hf_config_path, trust_remote_code=self.trust_remote_code, attn_implementation=attn_implementation
+            self.local_hf_config_path,
+            trust_remote_code=self.trust_remote_code,
+            attn_implementation=attn_implementation,
         )
 
         override_config_kwargs = {}
@@ -131,9 +143,13 @@ class HFModelConfig(BaseConfig):
                 }
             )
         override_config_kwargs.update(self.override_config)
-        update_model_config(self.hf_config, override_config_kwargs=override_config_kwargs)
+        update_model_config(
+            self.hf_config, override_config_kwargs=override_config_kwargs
+        )
 
-        self.share_embeddings_and_output_weights = getattr(self.hf_config, "tie_word_embeddings", False)
+        self.share_embeddings_and_output_weights = getattr(
+            self.hf_config, "tie_word_embeddings", False
+        )
 
         # get model architectures
         self.architectures = getattr(self.hf_config, "architectures", None)
