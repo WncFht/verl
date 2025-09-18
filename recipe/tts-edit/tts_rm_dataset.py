@@ -10,7 +10,7 @@ import json
 import os
 import random
 from string import Template
-from typing import Any
+from typing import Any, Optional, Tuple
 
 import datasets
 import numpy as np
@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from verl.utils.hdfs_io import copy, makedirs
 
-# System prompt for the AI assistant
+# ================== Constants ==================
 SYSTEM_PROMPT = """你是一个AI助理。
 
 在正式回答之前，你总是可以使用<think></think>标签进行详细地思考。
@@ -27,7 +27,6 @@ SYSTEM_PROMPT = """你是一个AI助理。
 若需要思考再回答，请保持答案与思考过程一致。
 """
 
-# Scorer prompt template for image editing evaluation
 SCORER_PROMPT_TEMPLATE = Template(
     """你是一个图像编辑评分模型。你的任务是根据给定的编辑指令，评估编辑后的图像相对于输入图像的质量。
 你的回答必须是0到9之间的整数，0表示编辑效果非常差，9表示编辑效果非常好。
@@ -37,6 +36,10 @@ SCORER_PROMPT_TEMPLATE = Template(
 输入图像：
 """
 )
+
+DATA_SOURCE = "tts_edit_score"
+
+# ================== Data Loading Functions ==================
 
 
 def load_tts_edit_dataset(data_dir: str, split: str = "train") -> list[dict[str, Any]]:
@@ -126,81 +129,34 @@ def load_tts_edit_dataset(data_dir: str, split: str = "train") -> list[dict[str,
     return dataset_items
 
 
-def print_dataset_statistics(
-    image_sizes: list[dict], instruction_lengths: list[int], scores: list[float]
-):
-    """Print statistics about the dataset."""
-    print("\n" + "=" * 60)
-    print("Dataset Statistics")
-    print("=" * 60)
+def print_score_distribution(
+    scores: list[float], title: str = "Score Distribution"
+) -> None:
+    """Print score distribution statistics."""
+    if not scores:
+        return
 
-    # Image size statistics
-    if image_sizes:
-        input_widths = [s["input"][0] for s in image_sizes]
-        input_heights = [s["input"][1] for s in image_sizes]
-        output_widths = [s["output"][0] for s in image_sizes]
-        output_heights = [s["output"][1] for s in image_sizes]
+    print(f"\n{title}:")
+    print(f"  Total samples: {len(scores)}")
+    print(f"  Mean: {np.mean(scores):.2f}, Std: {np.std(scores):.2f}")
 
-        print("\n📊 Image Dimensions:")
-        print("  Input images:")
+    # Score histogram
+    hist, bins = np.histogram(scores, bins=10)
+    print("  Distribution:")
+    for i in range(len(hist)):
+        bar = "█" * int(hist[i] * 30 / max(hist)) if max(hist) > 0 else ""
+        print(f"    [{bins[i]:.2f}-{bins[i + 1]:.2f}]: {bar} ({hist[i]})")
+
+
+def print_sample_examples(samples: list[dict[str, Any]]) -> None:
+    """Print sample examples from the dataset."""
+    print("\nSample Examples:")
+    for i, sample in enumerate(samples[:2], 1):
+        print(f"  Example {i}:")
         print(
-            f"    Width:  min={min(input_widths)}, max={max(input_widths)}, mean={np.mean(input_widths):.1f}"
+            f"    Instruction: {sample['instruction'][:80]}{'...' if len(sample['instruction']) > 80 else ''}"
         )
-        print(
-            f"    Height: min={min(input_heights)}, max={max(input_heights)}, mean={np.mean(input_heights):.1f}"
-        )
-        print("  Output images:")
-        print(
-            f"    Width:  min={min(output_widths)}, max={max(output_widths)}, mean={np.mean(output_widths):.1f}"
-        )
-        print(
-            f"    Height: min={min(output_heights)}, max={max(output_heights)}, mean={np.mean(output_heights):.1f}"
-        )
-
-    # Instruction length statistics
-    if instruction_lengths:
-        print("\n📝 Instruction Lengths:")
-        print(f"    Min: {min(instruction_lengths)} chars")
-        print(f"    Max: {max(instruction_lengths)} chars")
-        print(f"    Mean: {np.mean(instruction_lengths):.1f} chars")
-        print(f"    Median: {np.median(instruction_lengths):.1f} chars")
-
-    # Score statistics
-    if scores:
-        print("\n🎯 Score Distribution:")
-        print(f"    Min: {min(scores):.2f}")
-        print(f"    Max: {max(scores):.2f}")
-        print(f"    Mean: {np.mean(scores):.2f}")
-        print(f"    Std: {np.std(scores):.2f}")
-        print(f"    Median: {np.median(scores):.2f}")
-
-        # Score histogram
-        hist, bins = np.histogram(scores, bins=10)
-        print("    Distribution (10 bins):")
-        for i in range(len(hist)):
-            bar = "█" * int(hist[i] * 20 / max(hist))
-            print(f"      [{bins[i]:.2f}-{bins[i + 1]:.2f}]: {bar} ({hist[i]})")
-
-    print("=" * 60 + "\n")
-
-
-def print_sample_examples(samples: list[dict[str, Any]]):
-    """Print a few sample examples from the dataset."""
-    print("\n" + "=" * 60)
-    print("Sample Examples")
-    print("=" * 60)
-
-    for i, sample in enumerate(samples, 1):
-        print(f"\n📌 Sample {i}:")
-        print(f"  File: {os.path.basename(sample['input_image_path'])}")
-        print(
-            f"  Instruction: {sample['instruction'][:100]}{'...' if len(sample['instruction']) > 100 else ''}"
-        )
-        print(f"  Score: {sample['score']:.2f}")
-        print(f"  Input image path: {sample['input_image_path']}")
-        print(f"  Output image path: {sample['output_image_path']}")
-
-    print("=" * 60 + "\n")
+        print(f"    Score: {sample['score']:.2f}")
 
 
 def normalize_score(score: float, median: float = 0.9, mad: float = 0.1) -> int:
@@ -210,70 +166,84 @@ def normalize_score(score: float, median: float = 0.9, mad: float = 0.1) -> int:
     return int(max(0, min(9, normalized)))
 
 
-def print_final_statistics(train_dataset, test_dataset, args):
+def balanced_sample_by_score(
+    data: list[dict[str, Any]], score_median: float, score_mad: float, seed: int = 42
+) -> list[dict[str, Any]]:
+    """
+    Perform balanced sampling where each normalized score group contributes an equal number of samples.
+    """
+    import collections
+
+    # Group samples by normalized score
+    score_groups = collections.defaultdict(list)
+
+    for item in data:
+        # Calculate normalized score for this item
+        normalized_score = normalize_score(item["score"], score_median, score_mad)
+        score_groups[normalized_score].append(item)
+
+    # Find the minimum group size
+    group_sizes = {score: len(items) for score, items in score_groups.items()}
+    min_size = min(group_sizes.values())
+
+    print("\nBalanced Sampling (by normalized scores 0-9):")
+    print("  Groups before sampling:")
+    for score in sorted(score_groups.keys()):
+        print(f"    Score {score}: {group_sizes[score]} samples")
+    print(f"  → Taking {min_size} samples from each group (minimum group size)")
+    print(
+        f"  → Total after balancing: {min_size * len(score_groups)} (from {len(data)})"
+    )
+
+    # Sample min_size items from each group
+    random.seed(seed)
+    balanced_data = []
+
+    for score in sorted(score_groups.keys()):
+        group_items = score_groups[score]
+        sampled_items = random.sample(group_items, min_size)
+        balanced_data.extend(sampled_items)
+
+    # Shuffle the final dataset to mix scores
+    random.shuffle(balanced_data)
+
+    return balanced_data
+
+
+# ================== Visualization Functions ==================
+
+
+def print_final_statistics(
+    train_dataset: datasets.Dataset,
+    test_dataset: datasets.Dataset,
+    normalized_scores: list[int],
+) -> None:
     """Print final statistics about the processed datasets."""
     print("\n" + "=" * 60)
-    print("Final Dataset Summary")
+    print(f"Final Dataset: {len(train_dataset)} train, {len(test_dataset)} test")
+
+    # Final normalized score distribution
+    if normalized_scores:
+        print("\nFinal Normalized Score Distribution (0-9):")
+        score_counts = {i: normalized_scores.count(i) for i in range(10)}
+        for score in range(10):
+            count = score_counts.get(score, 0)
+            bar = (
+                "█" * int(count * 30 / max(score_counts.values()))
+                if max(score_counts.values()) > 0
+                else ""
+            )
+            print(f"  Score {score}: {bar} ({count})")
+
     print("=" * 60)
 
-    print("\n📈 Dataset Sizes:")
-    print(f"  Train dataset: {len(train_dataset)} samples")
-    print(f"  Test dataset: {len(test_dataset)} samples")
-    print(f"  Total: {len(train_dataset) + len(test_dataset)} samples")
 
-    if args.sample_size is not None:
-        print("\n🎲 Sampling Info:")
-        print(f"  Sampled: {args.sample_size} samples")
-        print(f"  Random seed: {args.seed}")
-
-    # Analyze prompts
-    print("\n💬 Prompt Analysis:")
-    if len(train_dataset) > 0:
-        train_sample = train_dataset[0]
-        if "prompt" in train_sample:
-            prompt_example = train_sample["prompt"]
-            print(f"  Number of messages per prompt: {len(prompt_example)}")
-            print(f"  Message roles: {[msg['role'] for msg in prompt_example]}")
-
-            # Estimate token count (rough approximation)
-            total_text_length = sum(
-                len(str(msg.get("content", ""))) for msg in prompt_example
-            )
-            estimated_tokens = (
-                total_text_length // 4
-            )  # Rough estimate: 4 chars per token
-            print(f"  Estimated tokens per prompt: ~{estimated_tokens}")
-
-    # Score normalization info
-    print("\n🎯 Score Normalization:")
-    print(f"  Median: {args.score_median}")
-    print(f"  MAD: {args.score_mad}")
-    print("  Output range: 0-9")
-
-    # Sample normalized scores
-    if len(train_dataset) > 0 and "reward_model" in train_dataset[0]:
-        sample_scores = [
-            train_dataset[i]["reward_model"]["ground_truth"]
-            for i in range(min(10, len(train_dataset)))
-        ]
-        print(f"  Sample normalized scores: {sample_scores}")
-
-    # Data format info
-    print("\n📦 Data Format:")
-    print("  Image key: 'images'")
-    print("  Images per sample: 2 (input + output)")
-    print(
-        "  Image resize strategy: Both images resized to output_size//2 (same dimensions)"
-    )
-    print("  Ability: 'image_editing_evaluation'")
-    print("  Data source: 'tts_edit_score'")
-
-    print("=" * 60 + "\n")
+# ================== Dataset Transformation Functions ==================
 
 
 def make_map_fn(
     split: str, data_source: str, score_median: float = 0.9, score_mad: float = 0.1
-):
+) -> callable:
     """
     Create a mapping function for dataset processing.
     This handles multi-image inputs for VLM training.
@@ -341,8 +311,16 @@ def make_map_fn(
     return process_fn
 
 
-def main():
-    parser = argparse.ArgumentParser()
+# ================== CLI and Helper Functions ==================
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Preprocess TTS Edit Score dataset for multi-image VLM training"
+    )
+
+    # Data paths
     parser.add_argument(
         "--data_dir",
         default="/mnt/data2/datasets/tts-edit/edited_images/",
@@ -358,12 +336,16 @@ def main():
         default=None,
         help="Optional HDFS directory to copy the processed files",
     )
+
+    # Dataset configuration
     parser.add_argument(
         "--train_split",
         type=float,
         default=0.9,
         help="Proportion of data to use for training",
     )
+
+    # Score normalization
     parser.add_argument(
         "--score_median", type=float, default=0.9, help="Median score for normalization"
     )
@@ -373,73 +355,66 @@ def main():
         default=0.1,
         help="MAD (Median Absolute Deviation) for score normalization",
     )
+
+    # Sampling configuration
     parser.add_argument(
         "--sample_size",
         type=int,
         default=None,
-        help="Number of samples to randomly select from the dataset. If None, use all samples.",
+        help="Number of samples to randomly select from the dataset",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
+    parser.add_argument(
+        "--balanced_sampling",
+        action="store_true",
+        help="Use balanced sampling where each score group contributes equal samples",
+    )
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    data_source = "tts_edit_score"
 
-    # Load dataset from directory
-    print(f"Loading dataset from {args.data_dir}...")
-    all_data = load_tts_edit_dataset(args.data_dir, split="all")
-
-    if not all_data:
-        raise ValueError(f"No valid data found in {args.data_dir}")
-
-    print(f"Found {len(all_data)} valid samples")
-
-    # Random sampling if sample_size is specified
-    if args.sample_size is not None and args.sample_size < len(all_data):
+def apply_sampling_strategy(
+    data: list[dict[str, Any]], args: argparse.Namespace
+) -> list[dict[str, Any]]:
+    """Apply the specified sampling strategy to the dataset."""
+    if args.balanced_sampling:
+        print("\n⚖️  Applying balanced sampling across score groups...")
+        original_size = len(data)
+        data = balanced_sample_by_score(
+            data, args.score_median, args.score_mad, args.seed
+        )
+        print(f"Dataset reduced from {original_size} to {len(data)} samples")
+    elif args.sample_size is not None and args.sample_size < len(data):
         print(
-            f"\n🎲 Randomly sampling {args.sample_size} samples from {len(all_data)} total samples"
+            f"\n🎲 Randomly sampling {args.sample_size} samples from {len(data)} total"
         )
         random.seed(args.seed)
-        all_data = random.sample(all_data, args.sample_size)
-        print(f"Using {len(all_data)} samples after sampling (seed={args.seed})")
+        data = random.sample(data, args.sample_size)
+        print(f"Using {len(data)} samples after sampling (seed={args.seed})")
 
-    # Calculate statistics for the (possibly sampled) dataset
-    print("\n📊 Computing dataset statistics...")
-    image_sizes = []
-    instruction_lengths = []
-    scores = []
+    return data
 
-    for i, item in enumerate(all_data):
-        instruction_lengths.append(len(item["instruction"]))
-        scores.append(item["score"])
 
-        # Load images for size statistics
-        if i < 10:  # Only load first 10 images for size stats
-            input_image = Image.open(item["input_image_path"]).convert("RGB")
-            output_image = Image.open(item["output_image_path"]).convert("RGB")
-            image_sizes.append(
-                {
-                    "input": (input_image.width, input_image.height),
-                    "output": (output_image.width, output_image.height),
-                }
-            )
-            input_image.close()
-            output_image.close()
-
-    # Print statistics for the sampled dataset
-    if all_data:
-        print_dataset_statistics(image_sizes, instruction_lengths, scores)
-        print_sample_examples(all_data[:2])  # Print first 2 samples
-
-    # Split into train and test
-    train_size = int(len(all_data) * args.train_split)
-    train_data = all_data[:train_size]
-    test_data = all_data[train_size:]
-
+def split_dataset(
+    data: list[dict[str, Any]], train_split: float
+) -> Tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split dataset into train and test sets."""
+    train_size = int(len(data) * train_split)
+    train_data = data[:train_size]
+    test_data = data[train_size:]
     print(f"\n📂 Dataset split: {len(train_data)} train, {len(test_data)} test samples")
+    return train_data, test_data
 
-    # Convert to HuggingFace datasets (this step can be slow with images)
-    print("🔄 Converting to HuggingFace datasets (this may take a while)...")
+
+def process_datasets(
+    train_data: list[dict[str, Any]],
+    test_data: list[dict[str, Any]],
+    data_source: str,
+    score_median: float,
+    score_mad: float,
+) -> Tuple[datasets.Dataset, datasets.Dataset]:
+    """Convert data to HuggingFace datasets and apply mapping."""
+    print("🔄 Converting to HuggingFace datasets...")
     train_dataset = datasets.Dataset.from_list(train_data)
     print("✅ Train dataset created")
 
@@ -449,7 +424,7 @@ def main():
     # Apply mapping function
     print("\n🔄 Processing train dataset...")
     train_dataset = train_dataset.map(
-        function=make_map_fn("train", data_source, args.score_median, args.score_mad),
+        function=make_map_fn("train", data_source, score_median, score_mad),
         with_indices=True,
         num_proc=8,
         desc="Processing train samples",
@@ -457,39 +432,129 @@ def main():
 
     print("\n🔄 Processing test dataset...")
     test_dataset = test_dataset.map(
-        function=make_map_fn("test", data_source, args.score_median, args.score_mad),
+        function=make_map_fn("test", data_source, score_median, score_mad),
         with_indices=True,
         num_proc=8,
         desc="Processing test samples",
     )
 
-    # Create local directory if it doesn't exist
-    # Append sample size to directory name if sampling was used
-    local_dir = os.path.expanduser(args.local_dir)
-    if args.sample_size is not None:
-        # Extract base name and add sample size
+    return train_dataset, test_dataset
+
+
+def get_output_directory(
+    local_dir: str, balanced_sampling: bool, sample_size: Optional[int]
+) -> str:
+    """Determine the output directory based on sampling configuration."""
+    local_dir = os.path.expanduser(local_dir)
+
+    if balanced_sampling:
         base_dir = local_dir.rstrip("/")
         if "tts_edit" in base_dir:
-            local_dir = base_dir.replace("tts_edit", f"tts_edit{args.sample_size}")
+            local_dir = base_dir.replace("tts_edit", "tts_edit_balanced")
         else:
-            local_dir = f"{base_dir}{args.sample_size}"
+            local_dir = f"{base_dir}_balanced"
+    elif sample_size is not None:
+        base_dir = local_dir.rstrip("/")
+        if "tts_edit" in base_dir:
+            local_dir = base_dir.replace("tts_edit", f"tts_edit{sample_size}")
+        else:
+            local_dir = f"{base_dir}{sample_size}"
 
+    return local_dir
+
+
+def save_datasets(
+    train_dataset: datasets.Dataset,
+    test_dataset: datasets.Dataset,
+    local_dir: str,
+    hdfs_dir: Optional[str] = None,
+) -> None:
+    """Save datasets to local directory and optionally copy to HDFS."""
     os.makedirs(local_dir, exist_ok=True)
     print(f"\n📁 Output directory: {local_dir}")
 
-    # Save to parquet format
     print("💾 Saving datasets...")
     train_dataset.to_parquet(os.path.join(local_dir, "train.parquet"))
     test_dataset.to_parquet(os.path.join(local_dir, "test.parquet"))
 
-    # Print final statistics
-    print_final_statistics(train_dataset, test_dataset, args)
+    if hdfs_dir is not None:
+        print(f"\n☁️  Copying to HDFS: {hdfs_dir}")
+        makedirs(hdfs_dir)
+        copy(src=local_dir, dst=hdfs_dir)
 
-    # Copy to HDFS if specified
-    if args.hdfs_dir is not None:
-        print(f"\n☁️  Copying to HDFS: {args.hdfs_dir}")
-        makedirs(args.hdfs_dir)
-        copy(src=local_dir, dst=args.hdfs_dir)
+
+# ================== Main Function ==================
+
+
+def main():
+    args = parse_arguments()
+
+    # Load dataset
+    print(f"Loading dataset from {args.data_dir}...")
+    all_data = load_tts_edit_dataset(args.data_dir)
+
+    if not all_data:
+        raise ValueError(f"No valid data found in {args.data_dir}")
+
+    print(f"Found {len(all_data)} valid samples")
+
+    # Save original scores before sampling
+    original_scores = [item["score"] for item in all_data]
+
+    # Print original distribution if using balanced sampling
+    if args.balanced_sampling:
+        print_score_distribution(
+            original_scores, "Original Score Distribution (before sampling)"
+        )
+
+    # Apply sampling strategy
+    all_data = apply_sampling_strategy(all_data, args)
+
+    # Print statistics after sampling
+    sampled_scores = [item["score"] for item in all_data]
+    if args.balanced_sampling:
+        print_score_distribution(
+            sampled_scores, "Raw Score Distribution (after balanced sampling)"
+        )
+
+        # Also show normalized score distribution to confirm balance
+        normalized_scores_check = [
+            normalize_score(item["score"], args.score_median, args.score_mad)
+            for item in all_data
+        ]
+        print("\nNormalized Score Distribution (0-9 scale):")
+        score_counts = {i: normalized_scores_check.count(i) for i in range(10)}
+        for score in range(10):
+            count = score_counts.get(score, 0)
+            if count > 0:
+                print(f"  Score {score}: {count} samples")
+    else:
+        print_score_distribution(sampled_scores, "Score Distribution")
+
+    print_sample_examples(all_data)
+
+    # Split dataset
+    train_data, test_data = split_dataset(all_data, args.train_split)
+
+    # Process datasets
+    train_dataset, test_dataset = process_datasets(
+        train_data, test_data, DATA_SOURCE, args.score_median, args.score_mad
+    )
+
+    # Determine output directory
+    local_dir = get_output_directory(
+        args.local_dir, args.balanced_sampling, args.sample_size
+    )
+
+    # Save datasets
+    save_datasets(train_dataset, test_dataset, local_dir, args.hdfs_dir)
+
+    # Print final statistics
+    normalized_scores = [
+        normalize_score(item["score"], args.score_median, args.score_mad)
+        for item in all_data
+    ]
+    print_final_statistics(train_dataset, test_dataset, normalized_scores)
 
     print("\n✅ Data preprocessing completed successfully!")
 

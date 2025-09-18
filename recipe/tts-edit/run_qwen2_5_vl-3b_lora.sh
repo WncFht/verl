@@ -23,8 +23,8 @@ TARGET_MODULES='["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down
 
 # 运行PPO训练
 python3 -m verl.trainer.main_ppo \
-    data.train_files=$HOME/data/tts_edit1000/train.parquet \
-    data.val_files=$HOME/data/tts_edit1000/test.parquet \
+    data.train_files=$HOME/data/tts_edit_balanced/train.parquet \
+    data.val_files=$HOME/data/tts_edit_balanced/test.parquet \
     data.train_batch_size=512 \
     data.max_prompt_length=1024 \
     data.max_response_length=512 \
@@ -76,7 +76,7 @@ python3 -m verl.trainer.main_ppo \
     reward_model.enable=False \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_tts_edit' \
-    trainer.experiment_name='qwen2_5_vl_3b_tts_edit_scoring' \
+    trainer.experiment_name='qwen2_5_vl_3b_tts_edit_scoring_balanced' \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
